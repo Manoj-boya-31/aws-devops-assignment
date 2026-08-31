@@ -1,0 +1,29 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!terraform.tfvars.example
+.terraform.lock.hcl
+
+# Node
+node_modules/
+npm-debug.log*
+coverage/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# SSH/private keys
+*.pem
+*.key
+id_rsa
+id_ed25519
