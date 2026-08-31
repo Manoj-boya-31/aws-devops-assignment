@@ -1,0 +1,14 @@
+{
+  "name": "devops-assignment-app",
+  "version": "1.0.0",
+  "description": "Sample application for AWS DevOps assignment",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}
