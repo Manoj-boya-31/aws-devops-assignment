@@ -1,0 +1,8 @@
+aws_region      = "ap-south-1"
+project_name    = "devops-assignment"
+db_name         = "devopsdb"
+db_username     = "devops"
+db_password     = "CHANGE_THIS_TO_A_STRONG_PASSWORD"
+ssh_public_key  = "ssh-ed25519 AAAA...replace-with-your-public-key..."
+ssh_ingress_cidr = "0.0.0.0/0"
+instance_type   = "t3.micro"
