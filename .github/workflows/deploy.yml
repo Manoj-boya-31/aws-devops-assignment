@@ -1,0 +1,81 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      IMAGE_NAME: devops-assignment-app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: app
+        run: npm install
+
+      - name: Test
+        working-directory: app
+        run: npm test
+
+      - name: Build Docker image
+        run: docker build -t ${IMAGE_NAME}:${GITHUB_SHA} ./app
+
+      - name: Export Docker image
+        run: docker save ${IMAGE_NAME}:${GITHUB_SHA} | gzip > app-image.tar.gz
+
+      - name: Select environment
+        id: env
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "name=production" >> "$GITHUB_OUTPUT"
+            echo "host=${{ secrets.PRODUCTION_HOST }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=staging" >> "$GITHUB_OUTPUT"
+            echo "host=${{ secrets.STAGING_HOST }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ steps.env.outputs.host }}" >> ~/.ssh/known_hosts
+
+      - name: Copy image to EC2
+        run: |
+          scp app-image.tar.gz ec2-user@${{ steps.env.outputs.host }}:/tmp/app-image.tar.gz
+
+      - name: Deploy container
+        run: |
+          ssh ec2-user@${{ steps.env.outputs.host }} "IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${GITHUB_SHA} bash -s" <<'REMOTE'
+          set -e
+          docker load < /tmp/app-image.tar.gz
+          docker rm -f devops-assignment-app || true
+          docker run -d \
+            --name devops-assignment-app \
+            --restart unless-stopped \
+            -p 80:3000 \
+            --env-file /opt/devops-app/app.env \
+            -v /var/log/app:/var/log/app \
+            "${IMAGE_NAME}:${IMAGE_TAG}"
+          sleep 5
+          curl --fail http://localhost/health
+          rm -f /tmp/app-image.tar.gz
+          REMOTE
