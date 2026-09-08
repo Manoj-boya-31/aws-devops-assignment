@@ -1,0 +1,175 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = 'devops-assignment-app'
+        APP_DIR = 'app'
+        NODE_VERSION = '20'
+
+        STAGING_HOST = credentials('staging-host')
+        PRODUCTION_HOST = credentials('production-host')
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh 'npm install'
+                }
+            }
+        }
+
+        stage('Test') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh 'npm test'
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    env.IMAGE_TAG = sh(
+                        script: 'git rev-parse HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    sh """
+                        docker build \
+                          -t ${IMAGE_NAME}:${IMAGE_TAG} \
+                          ./${APP_DIR}
+                    """
+                }
+            }
+        }
+
+        stage('Export Docker Image') {
+            steps {
+                sh """
+                    docker save ${IMAGE_NAME}:${IMAGE_TAG} | gzip > app-image.tar.gz
+                """
+            }
+        }
+
+        stage('Select Environment') {
+            steps {
+                script {
+                    if (env.BRANCH_NAME == 'main') {
+                        env.DEPLOY_ENV = 'production'
+                        env.DEPLOY_HOST = env.PRODUCTION_HOST
+                    } else if (env.BRANCH_NAME == 'develop') {
+                        env.DEPLOY_ENV = 'staging'
+                        env.DEPLOY_HOST = env.STAGING_HOST
+                    } else {
+                        currentBuild.result = 'NOT_BUILT'
+                        error("Deployment is only supported for main/develop")
+                    }
+
+                    echo "Deploying to ${env.DEPLOY_ENV}"
+                    echo "Target: ${env.DEPLOY_HOST}"
+                }
+            }
+        }
+
+        stage('Configure SSH') {
+            steps {
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'ec2-ssh-key',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )
+                ]) {
+                    sh """
+                        mkdir -p ~/.ssh
+                        chmod 700 ~/.ssh
+
+                        ssh-keyscan -H ${DEPLOY_HOST} >> ~/.ssh/known_hosts
+
+                        chmod 600 ${SSH_KEY}
+                    """
+                }
+            }
+        }
+
+        stage('Copy Docker Image') {
+            steps {
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'ec2-ssh-key',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )
+                ]) {
+                    sh """
+                        scp \
+                          -i ${SSH_KEY} \
+                          app-image.tar.gz \
+                          ${SSH_USER}@${DEPLOY_HOST}:/tmp/app-image.tar.gz
+                    """
+                }
+            }
+        }
+
+        stage('Deploy Container') {
+            steps {
+                withCredentials([
+                    sshUserPrivateKey(
+                        credentialsId: 'ec2-ssh-key',
+                        keyFileVariable: 'SSH_KEY',
+                        usernameVariable: 'SSH_USER'
+                    )
+                ]) {
+                    sh """
+                        ssh -i ${SSH_KEY} ${SSH_USER}@${DEPLOY_HOST} \
+                        "IMAGE_NAME=${IMAGE_NAME} IMAGE_TAG=${IMAGE_TAG} bash -s" <<'REMOTE'
+
+                        set -e
+
+                        docker load < /tmp/app-image.tar.gz
+
+                        docker rm -f ${IMAGE_NAME} || true
+
+                        docker run -d \\
+                          --name ${IMAGE_NAME} \\
+                          --restart unless-stopped \\
+                          -p 80:3000 \\
+                          --env-file /opt/devops-app/app.env \\
+                          -v /var/log/app:/var/log/app \\
+                          "\${IMAGE_NAME}:\${IMAGE_TAG}"
+
+                        sleep 5
+
+                        curl --fail http://localhost/health
+
+                        rm -f /tmp/app-image.tar.gz
+
+                        REMOTE
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployment to ${env.DEPLOY_ENV} completed successfully."
+        }
+
+        failure {
+            echo "Pipeline failed."
+        }
+
+        always {
+            sh 'rm -f app-image.tar.gz || true'
+        }
+    }
+}
