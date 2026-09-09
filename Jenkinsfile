@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         IMAGE_NAME = 'devops-assignment-app'
-        APP_DIR = 'app'
+        APP_DIR = 'simple-node-app'
         NODE_VERSION = '20'
 
         STAGING_HOST = credentials('staging-host')
